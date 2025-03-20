@@ -1,159 +1,138 @@
-# Source: @DeepCharts Youtube Channel (https://www.youtube.com/@DeepCharts)
-
 import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
-import pandas as pd
 import yfinance as yf
-from datetime import datetime, timedelta
-import pytz
+import pandas as pd
+import plotly.graph_objects as go
 import ta
 
-##########################################################################################
-## PART 1: Define Functions for Pulling, Processing, and Creating Techincial Indicators ##
-##########################################################################################
+# Function to fetch stock data
+def get_stock_data(ticker, start, end):
+    try:
+        data = yf.download(ticker, start=start, end=end)
 
-# Fetch stock data based on the ticker, period, and interval
-def fetch_stock_data(ticker, period, interval):
-    end_date = datetime.now()
-    if period == '1wk':
-        start_date = end_date - timedelta(days=7)
-        data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
-    else:
-        data = yf.download(ticker, period=period, interval=interval)
+        if data is None or data.empty:
+            st.error(f"⚠ No data available for {ticker}. Please check the symbol and try again.")
+            return None
+
+        # Fix column index if MultiIndex
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = [col[0] for col in data.columns]
+
+        if 'Close' not in data.columns:
+            st.error("'Close' column is missing. Unable to compute indicators.")
+            return None
+
+        return data
+
+    except Exception as e:
+        st.error(f" Error fetching data for {ticker}: {str(e)}")
+        return None
+
+# Function to calculate indicators
+def calculate_indicators(data, show_sma, sma_period, show_ema, ema_period, show_bollinger, show_rsi, show_macd):
+    if data is None or data.empty:
+        return None
+    
+    data = data.dropna(subset=['Close'], how='any')
+
+    if show_sma and len(data) > sma_period:
+        data[f'SMA_{sma_period}'] = ta.trend.sma_indicator(data['Close'], window=sma_period)
+
+    if show_ema and len(data) > ema_period:
+        data[f'EMA_{ema_period}'] = ta.trend.ema_indicator(data['Close'], window=ema_period)
+
+    if show_bollinger and len(data) > 20:
+        indicator_bb = ta.volatility.BollingerBands(close=data["Close"], window=20, window_dev=2)
+        data['BB_high'] = indicator_bb.bollinger_hband()
+        data['BB_low'] = indicator_bb.bollinger_lband()
+
+    if show_rsi and len(data) > 14:
+        data['RSI'] = ta.momentum.RSIIndicator(data['Close'], window=14).rsi()
+
+    if show_macd and len(data) > 26:
+        macd = ta.trend.MACD(data['Close'])
+        data['MACD'] = macd.macd()
+        data['MACD_signal'] = macd.macd_signal()
+
     return data
 
-# Process data to ensure it is timezone-aware and has the correct format
-def process_data(data):
-    if data.index.tzinfo is None:
-        data.index = data.index.tz_localize('UTC')
-    data.index = data.index.tz_convert('US/Eastern')
-    data.reset_index(inplace=True)
-    data.rename(columns={'Date': 'Datetime'}, inplace=True)
-    return data
-
-# Calculate basic metrics from the stock data
-def calculate_metrics(data):
-    last_close = data['Close'].iloc[-1]
-    prev_close = data['Close'].iloc[0]
-    change = last_close - prev_close
-    pct_change = (change / prev_close) * 100
-    high = data['High'].max()
-    low = data['Low'].min()
-    volume = data['Volume'].sum()
-    return last_close, change, pct_change, high, low, volume
-
-# Add simple moving average (SMA) and exponential moving average (EMA) indicators
-def add_technical_indicators(data):
-    data['SMA_20'] = ta.trend.sma_indicator(data['Close'], window=20)
-    data['EMA_20'] = ta.trend.ema_indicator(data['Close'], window=20)
-    return data
-
-###############################################
-## PART 2: Creating the Dashboard App layout ##
-###############################################
-
-
-# Set up Streamlit page layout
-st.set_page_config(layout="wide")
-st.title('Real Time Stock Dashboard')
-
-
-# 2A: SIDEBAR PARAMETERS ############
-
-# Sidebar for user input parameters
-st.sidebar.header('Chart Parameters')
-ticker = st.sidebar.text_input('Ticker', 'ADBE')
-time_period = st.sidebar.selectbox('Time Period', ['1d', '1wk', '1mo', '1y', 'max'])
-chart_type = st.sidebar.selectbox('Chart Type', ['Candlestick', 'Line'])
-indicators = st.sidebar.multiselect('Technical Indicators', ['SMA 20', 'EMA 20'])
-
-# Mapping of time periods to data intervals
-interval_mapping = {
-    '1d': '1m',
-    '1wk': '30m',
-    '1mo': '1d',
-    '1y': '1wk',
-    'max': '1wk'
-}
-
-
-# 2B: MAIN CONTENT AREA ############
-
-# Update the dashboard based on user input
-if st.sidebar.button('Update'):
-    data = fetch_stock_data(ticker, time_period, interval_mapping[time_period])
-    data = process_data(data)
-    data = add_technical_indicators(data)
-    
-    last_close, change, pct_change, high, low, volume = calculate_metrics(data)
-    
-    # Display main metrics
-    st.metric(label=f"{ticker} Last Price", value=f"{last_close:.2f} USD", delta=f"{change:.2f} ({pct_change:.2f}%)")
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("High", f"{high:.2f} USD")
-    col2.metric("Low", f"{low:.2f} USD")
-    col3.metric("Volume", f"{volume:,}")
-    
-    # Plot the stock price chart
+# Function to plot stock data
+def plot_stock_data(data, ticker, show_sma, sma_period, show_ema, ema_period, show_bollinger, show_rsi, show_macd):
     fig = go.Figure()
-    if chart_type == 'Candlestick':
-        fig.add_trace(go.Candlestick(x=data['Datetime'],
-                                     open=data['Open'],
-                                     high=data['High'],
-                                     low=data['Low'],
-                                     close=data['Close']))
+    fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Close Price', line=dict(color='blue')))
+
+    if show_sma and f'SMA_{sma_period}' in data.columns:
+        fig.add_trace(go.Scatter(x=data.index, y=data[f'SMA_{sma_period}'], mode='lines', name=f'SMA {sma_period}', line=dict(color='orange')))
+
+    if show_ema and f'EMA_{ema_period}' in data.columns:
+        fig.add_trace(go.Scatter(x=data.index, y=data[f'EMA_{ema_period}'], mode='lines', name=f'EMA {ema_period}', line=dict(color='green')))
+
+    if show_bollinger and 'BB_high' in data.columns:
+        fig.add_trace(go.Scatter(x=data.index, y=data['BB_high'], mode='lines', name='Bollinger High', line=dict(color='red')))
+        fig.add_trace(go.Scatter(x=data.index, y=data['BB_low'], mode='lines', name='Bollinger Low', line=dict(color='purple')))
+
+    fig.update_layout(title=f"{ticker} Stock Price", xaxis_title="Date", yaxis_title="Price", template="plotly_dark")
+    st.plotly_chart(fig)
+
+    if show_rsi and 'RSI' in data.columns:
+        st.subheader("Relative Strength Index (RSI)")
+        fig_rsi = go.Figure()
+        fig_rsi.add_trace(go.Scatter(x=data.index, y=data['RSI'], mode='lines', name='RSI', line=dict(color='yellow')))
+        fig_rsi.add_hline(y=70, line_dash="dot", line=dict(color="red"))
+        fig_rsi.add_hline(y=30, line_dash="dot", line=dict(color="green"))
+        st.plotly_chart(fig_rsi)
+
+    if show_macd and 'MACD' in data.columns:
+        st.subheader("MACD Indicator")
+        fig_macd = go.Figure()
+        fig_macd.add_trace(go.Scatter(x=data.index, y=data['MACD'], mode='lines', name='MACD', line=dict(color='cyan')))
+        fig_macd.add_trace(go.Scatter(x=data.index, y=data['MACD_signal'], mode='lines', name='Signal Line', line=dict(color='magenta')))
+        st.plotly_chart(fig_macd)
+
+# Streamlit App
+def main():
+    st.title("📈 Stock Market Dashboard")
+    st.sidebar.header("Stock Selection")
+
+    # Dropdown menu for stock selection
+    stock_list = {
+        "Apple (AAPL)": "AAPL",
+        "Tesla (TSLA)": "TSLA",
+        "Amazon (AMZN)": "AMZN",
+        "Microsoft (MSFT)": "MSFT",
+        "Google (GOOGL)": "GOOGL",
+        "NVIDIA (NVDA)": "NVDA",
+        "Meta (META)": "META",
+        "Netflix (NFLX)": "NFLX"
+    }
+
+    selected_stock = st.sidebar.selectbox("Choose a stock:", list(stock_list.keys()))
+    ticker = stock_list[selected_stock]
+
+    start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2024-01-01"))
+    end_date = st.sidebar.date_input("End Date", pd.to_datetime("today"))
+
+    # Indicator Selection
+    show_sma = st.sidebar.checkbox("Show SMA", value=True)
+    sma_period = st.sidebar.slider("SMA Period", min_value=5, max_value=100, value=20)
+
+    show_ema = st.sidebar.checkbox("Show EMA", value=False)
+    ema_period = st.sidebar.slider("EMA Period", min_value=5, max_value=100, value=20)
+
+    show_bollinger = st.sidebar.checkbox("Show Bollinger Bands", value=False)
+    show_rsi = st.sidebar.checkbox("Show RSI", value=False)
+    show_macd = st.sidebar.checkbox("Show MACD", value=False)
+
+    # Fetch Data
+    data = get_stock_data(ticker, start_date, end_date)
+
+    if data is not None:
+        data = calculate_indicators(data, show_sma, sma_period, show_ema, ema_period, show_bollinger, show_rsi, show_macd)
+        if data is not None:
+            plot_stock_data(data, ticker, show_sma, sma_period, show_ema, ema_period, show_bollinger, show_rsi, show_macd)
+        else:
+            st.error(" No valid data for plotting.")
     else:
-        fig = px.line(data, x='Datetime', y='Close')
-    
-    # Add selected technical indicators to the chart
-    for indicator in indicators:
-        if indicator == 'SMA 20':
-            fig.add_trace(go.Scatter(x=data['Datetime'], y=data['SMA_20'], name='SMA 20'))
-        elif indicator == 'EMA 20':
-            fig.add_trace(go.Scatter(x=data['Datetime'], y=data['EMA_20'], name='EMA 20'))
-    
-    # Format graph
-    fig.update_layout(title=f'{ticker} {time_period.upper()} Chart',
-                      xaxis_title='Time',
-                      yaxis_title='Price (USD)',
-                      height=600)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Display historical data and technical indicators
-    st.subheader('Historical Data')
-    st.dataframe(data[['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume']])
-    
-    st.subheader('Technical Indicators')
-    st.dataframe(data[['Datetime', 'SMA_20', 'EMA_20']])
+        st.error("Failed to fetch stock data. Check the ticker symbol or try again later.")
 
-
-# 2C: SIDEBAR PRICES ############
-
-# Sidebar section for real-time stock prices of selected symbols
-# Sidebar section for real-time stock prices of selected symbols
-st.sidebar.header('Real-Time Stock Prices')
-stock_symbols = ['AAPL', 'GOOGL', 'AMZN', 'MSFT']
-
-for symbol in stock_symbols:
-    real_time_data = fetch_stock_data(symbol, '1d', '1m')
-    
-    if not real_time_data.empty and 'Close' in real_time_data.columns:
-        real_time_data = process_data(real_time_data)
-        
-        # Ensure accessing a scalar value
-        last_price = real_time_data['Close'].iloc[-1] if not real_time_data['Close'].empty else None
-        open_price = real_time_data['Open'].iloc[0] if not real_time_data['Open'].empty else None
-        
-        if last_price is not None and open_price is not None:
-            change = last_price - open_price
-            pct_change = (change / open_price) * 100
-            st.sidebar.metric(f"{symbol}", f"{last_price:.2f} USD", f"{change:.2f} ({pct_change:.2f}%)")
-    else:
-        st.sidebar.metric(f"{symbol}", "Data Unavailable", "")
-
-
-# Sidebar information section
-st.sidebar.subheader('About')
-st.sidebar.info('This dashboard provides stock data and technical indicators for various time periods. Use the sidebar to customize your view.')
+if __name__ == "__main__":
+    main()
