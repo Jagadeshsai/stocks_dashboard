@@ -1,4 +1,4 @@
-#!/var/www/html/myproject/venv/bin/python
+#!/var/www/html/myproject/venv/bin/python3
 import streamlit as st
 import yfinance as yf
 import pandas as pd
